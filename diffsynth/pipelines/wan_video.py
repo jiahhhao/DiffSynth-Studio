@@ -36,7 +36,7 @@ class WanVideoPipeline(BasePipeline):
             device=device, torch_dtype=torch_dtype,
             height_division_factor=16, width_division_factor=16, time_division_factor=4, time_division_remainder=1
         )
-        self.scheduler = FlowMatchScheduler("Wan")
+        self.scheduler = FlowMatchScheduler("Wan")  # 时间步，反向扩散
         self.tokenizer: HuggingfaceTokenizer = None
         self.audio_processor: Wav2Vec2Processor = None
         self.text_encoder: WanTextEncoder = None
@@ -108,6 +108,20 @@ class WanVideoPipeline(BasePipeline):
         self.use_unified_sequence_parallel = True
 
 
+    """
+    从预训练权重创建 WanVideoPipeline。
+
+    这个函数的主要流程：
+    1. 处理公共模型文件重定向
+    2. 如果 use_usp=True，则初始化多卡 USP 环境
+    3. 创建 WanVideoPipeline 对象
+    4. 下载并加载模型
+    5. 从 model_pool 中取出 DiT、T5、VAE、image_encoder 等模块
+    6. 初始化 tokenizer / audio processor
+    7. 如果需要，开启 USP
+    8. 检查是否启用显存管理
+    9. 返回 pipe
+    """
     @staticmethod
     def from_pretrained(
         torch_dtype: torch.dtype = torch.bfloat16,
@@ -144,9 +158,27 @@ class WanVideoPipeline(BasePipeline):
                 device = get_device_name()
         # Initialize pipeline
         pipe = WanVideoPipeline(device=device, torch_dtype=torch_dtype)
+
+        # ------------------------------------------------------------
+        # 4. 下载并加载模型
+        # ------------------------------------------------------------
+        # model_configs 里面可能包含：
+        # - DiT 主模型
+        # - T5 文本编码器
+        # - VAE
+        # - CLIP image encoder
+        # - VACE / VAP / audio encoder / animate adapter 等
+        #
+        # download_and_load_models 会返回一个 model_pool，
+        # 后面再从 model_pool 里按模型名取出具体模块。
+
         model_pool = pipe.download_and_load_models(model_configs, vram_limit)
         
         # Fetch models
+
+        # ------------------------------------------------------------
+        # 5. 从 model_pool 中取出各个模型模块
+        # ------------------------------------------------------------
         pipe.text_encoder = model_pool.fetch_model("wan_video_text_encoder")
         dit = model_pool.fetch_model("wan_video_dit", index=2)
         if isinstance(dit, list):
@@ -239,6 +271,8 @@ class WanVideoPipeline(BasePipeline):
         cfg_merge: bool = False,
         # Boundary
         switch_DiT_boundary: float = 0.875,
+        # Growth control
+        growth_days: Optional[float] = None,
         # Scheduler
         num_inference_steps: int = 50,
         sigma_shift: float = 5.0,
@@ -292,6 +326,7 @@ class WanVideoPipeline(BasePipeline):
             "height": height, "width": width, "num_frames": num_frames,
             "cfg_scale": cfg_scale, "cfg_merge": cfg_merge,
             "sigma_shift": sigma_shift,
+            "growth_days": growth_days,
             "motion_bucket_id": motion_bucket_id,
             "longcat_video": longcat_video,
             "tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride,
@@ -306,56 +341,72 @@ class WanVideoPipeline(BasePipeline):
         for unit in self.units:
             inputs_shared, inputs_posi, inputs_nega = self.unit_runner(unit, self, inputs_shared, inputs_posi, inputs_nega)
 
-        # Denoise
+        # Denoise (去噪循环: 视频生成的反向扩散主干)
+        # 加载迭代必需的模型(DiT, motion_controller等)到显存
         self.load_models_to_device(self.in_iteration_models)
         models = {name: getattr(self, name) for name in self.in_iteration_models}
         for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
             # Switch DiT if necessary
+            # 对于像Wan2.2这样的两阶段模型，在设定的 timestep 阈值发生 DiT 主体的切换
             if timestep.item() < switch_DiT_boundary * 1000 and self.dit2 is not None and not models["dit"] is self.dit2:
                 self.load_models_to_device(self.in_iteration_models_2)
                 models["dit"] = self.dit2
                 models["vace"] = self.vace2
                 
-            # Timestep
+            # Timestep (转换当前时间步为张量形式)
             timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
             
-            # Inference
+            # Inference (预测噪声)
+            # 使用正向 prompt (含控制条件) 进行前向推理
             noise_pred_posi = self.model_fn(**models, **inputs_shared, **inputs_posi, timestep=timestep)
             if cfg_scale != 1.0:
                 if cfg_merge:
+                    # 如果启用了 cfg_merge 则正负向可以拆在一起跑降低运算量，这里将其分割 (chunk(2))
                     noise_pred_posi, noise_pred_nega = noise_pred_posi.chunk(2, dim=0)
                 else:
+                    # 否则显式地以 negative_prompt (或无条件) 再跑一次前向
                     noise_pred_nega = self.model_fn(**models, **inputs_shared, **inputs_nega, timestep=timestep)
+                # Classifier-Free Guidance (CFG) 特征融合
                 noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
             else:
                 noise_pred = noise_pred_posi
 
-            # Scheduler
+            # Scheduler (调度器步进更新)
+            # 依据流匹配调度算法更新本次 step 后的去噪 latents
             inputs_shared["latents"] = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], inputs_shared["latents"])
             if "first_frame_latents" in inputs_shared:
+                # 约束并保留第一帧不随噪声改变，一般用于图像到视频 (I2V)
                 inputs_shared["latents"][:, :, 0:1] = inputs_shared["first_frame_latents"]
         
         # VACE (TODO: remove it)
+        # 用作视频编辑或运动重定向处理完后的冗余帧移除
         if vace_reference_image is not None or (animate_pose_video is not None and animate_face_video is not None):
             if vace_reference_image is not None and isinstance(vace_reference_image, list):
                 f = len(vace_reference_image)
             else:
                 f = 1
             inputs_shared["latents"] = inputs_shared["latents"][:, :, f:]
+        
         # post-denoising, pre-decoding processing logic
+        # 运行后处理单元模块，如 S2V 中需要对隐空间合并特定 motion 的帧
         for unit in self.post_units:
             inputs_shared, _, _ = self.unit_runner(unit, self, inputs_shared, inputs_posi, inputs_nega)
-        # Decode
+        
+        # Decode (解码)
+        # 卸载其他模型，加载 VAE 用于解码隐变量 (latents) 回到像素空间
         self.load_models_to_device(['vae'])
         if framewise_decoding:
+            # 逐帧解码，能节省显存，但是可能出现时序闪烁不连贯
             video = self.vae.decode_framewise(inputs_shared["latents"], device=self.device)
         else:
+            # 使用3D解码，可选 Tiled 块状解码进一步节省 VRAM
             video = self.vae.decode(inputs_shared["latents"], device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
+        
         if output_type == "quantized":
-            video = self.vae_output_to_video(video)
+            video = self.vae_output_to_video(video)  # 格式化/量化像素(从Tensor转到numpy/pil等)
         elif output_type == "floatpoint":
             pass
-        self.load_models_to_device([])
+        self.load_models_to_device([]) # 清理 VRAM
         return video
 
 
@@ -1273,6 +1324,37 @@ def wantodance_get_single_freqs(freqs, frame_num, fps):
     return freqs_new
 
 
+
+# 第一版尝试，已弃用：
+# 之前把 growth_days 编码后直接加到 DiT 的 timestep embedding 上：
+#   t = t + growth_emb
+# 这会干扰扩散模型原本的去噪时间步语义；即使不加载 LoRA，基模型也可能变乱。
+# 因此这里保留说明，不再使用该路径。新版方案把 growth 条件作为额外 context token。
+# def apply_growth_days_condition_to_time_embedding(...):
+#     ...
+
+'''# TODO 应该需要支持 batch 的 growth_days 输入，目前的实现只支持单值输入'''
+def append_growth_days_context_token(
+    context: torch.Tensor,
+    growth_days,
+    num_frames: Optional[int] = None,
+):
+    if growth_days is None:
+        return context
+    if torch.is_tensor(growth_days):
+        growth_days_tensor = growth_days.to(device=context.device, dtype=context.dtype).flatten()
+    else:
+        growth_days_tensor = torch.tensor([float(growth_days)], device=context.device, dtype=context.dtype)
+    frame_count = max(float(num_frames or 1) - 1.0, 1.0)
+    days_per_frame = growth_days_tensor / frame_count
+    growth_position = days_per_frame * 100.0
+    growth_token = sinusoidal_embedding_1d(context.shape[-1], growth_position)
+    growth_token = growth_token.to(device=context.device, dtype=context.dtype)
+    if growth_token.shape[0] != context.shape[0]:
+        growth_token = growth_token[:1].repeat(context.shape[0], 1)
+        print(f"    Warning: growth token batch size {growth_token.shape[0]} does not match context batch size {context.shape[0]}. Repeating growth token to match context batch size.")
+    return torch.cat([context, growth_token.unsqueeze(1)], dim=1)
+
 def model_fn_wan_video(
     dit: WanModel,
     motion_controller: WanMotionControllerModel = None,
@@ -1297,6 +1379,8 @@ def model_fn_wan_video(
     tea_cache: TeaCache = None,
     use_unified_sequence_parallel: bool = False,
     motion_bucket_id: Optional[torch.Tensor] = None,
+    num_frames: Optional[int] = None,
+    growth_days: Optional[Union[float, torch.Tensor]] = None,
     pose_latents=None,
     face_pixel_values=None,
     longcat_latents=None,
@@ -1329,6 +1413,8 @@ def model_fn_wan_video(
             tea_cache=tea_cache,
             use_unified_sequence_parallel=use_unified_sequence_parallel,
             motion_bucket_id=motion_bucket_id,
+            num_frames=num_frames,
+            growth_days=growth_days,
         )
         return TemporalTiler_BCTHW().run(
             model_fn_wan_video,
@@ -1383,15 +1469,18 @@ def model_fn_wan_video(
             t_chunks = torch.chunk(t, get_sequence_parallel_world_size(), dim=1)
             t_chunks = [torch.nn.functional.pad(chunk, (0, 0, 0, t_chunks[0].shape[1]-chunk.shape[1]), value=0) for chunk in t_chunks]
             t = t_chunks[get_sequence_parallel_rank()]
+        # 第一版 growth 注入曾在这里改 timestep embedding，已弃用；growth 改为追加 context token。
         t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
     else:
         t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep))
+        # 第一版 growth 注入曾在这里改 timestep embedding，已弃用；growth 改为追加 context token。
         t_mod = dit.time_projection(t).unflatten(1, (6, dit.dim))
     
     # Motion Controller
     if motion_bucket_id is not None and motion_controller is not None:
         t_mod = t_mod + motion_controller(motion_bucket_id).unflatten(1, (6, dit.dim))
     context = dit.text_embedding(context)
+    context = append_growth_days_context_token(context, growth_days, num_frames)
 
     x = latents
     # Merged cfg

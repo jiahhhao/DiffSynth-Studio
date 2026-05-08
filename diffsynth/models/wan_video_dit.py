@@ -209,6 +209,11 @@ class GateModule(nn.Module):
         return x + gate * residual
 
 class DiTBlock(nn.Module):
+    """
+    DiT (Diffusion Transformer) 基础层。
+    结构包含：带有 3D-RoPE 的自注意力 (Self-Attention)、交叉注意力 (Cross-Attention，处理文本或图像特征)、以及前馈网络 (FFN)。
+    同时通过时间调制 (t_mod / AdaLN, Adaptive Layer Normalization)，利用时间步信息对特征进行自适应缩放(scale)、平移(shift)和门控(gate)。
+    """
     def __init__(self, has_image_input: bool, dim: int, num_heads: int, ffn_dim: int, eps: float = 1e-6):
         super().__init__()
         self.dim = dim
@@ -336,6 +341,12 @@ class WanToDanceInjector(nn.Module):
 
 
 class WanModel(torch.nn.Module):
+    """
+    WanModel 是 Wan-Video 视频生成模型的核心 3D Diffusion Transformer (DiT) 结构。
+    该类整合了 3D 卷积层 (进行序列重排 / Patchify)、绝对时间步嵌入 (Time Embedding)、
+    动态生成的旋转位置编码 (3D RoPE) 和多层的 DiTBlock 进行视频隐空间的去噪过程。
+    同时也提供了丰富的适配引脚，如用于控制生成的 Adapter，或是特定音频/图像驱动的可选层（如 WanToDance）。
+    """
 
     _repeated_blocks = ["DiTBlock"]
 
@@ -517,24 +528,41 @@ class WanModel(torch.nn.Module):
                 use_gradient_checkpointing_offload: bool = False,
                 **kwargs,
                 ):
+        """
+        前向传播 (Forward Pass)：
+        参数：
+          x: 输入的带加噪视频特征或纯噪声张量
+          timestep: 当前扩散的时间步 (Timesteps)
+          context: 额外的文本特征描述 (由 Text Encoder 提取)
+          clip_feature / y: 额外的图像条件特征和隐特征
+        """
+        # 1. 计算时间步的正弦嵌入 (Sinusoidal Embedding)，并通过映射网络处理
         t = self.time_embedding(
             sinusoidal_embedding_1d(self.freq_dim, timestep).to(x.dtype))
+        # 将时间嵌入扩维，生成 6 组调制参数供后续的 scale / shift / gate 使用
         t_mod = self.time_projection(t).unflatten(1, (6, self.dim))
+        
+        # 2. 将文本上下文特征进行初次投影
         context = self.text_embedding(context)
         
+        # 3. 处理可选的图像条件注入 (Image Condition: I2V 等)
         if self.has_image_input:
             x = torch.cat([x, y], dim=1)  # (b, c_x + c_y, f, h, w)
             clip_embdding = self.img_emb(clip_feature)
+            # 将图像语义特征和文本语义特征共同作为 CrossAttention 的 context
             context = torch.cat([clip_embdding, context], dim=1)
         
+        # 4. Patchify 过程：(如 3D Conv) 得到序列 token
         x, (f, h, w) = self.patchify(x)
         
+        # 5. 生成对应的 3D 旋转位置编码 (RoPE)
         freqs = torch.cat([
             self.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
             self.freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
             self.freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
         ], dim=-1).reshape(f * h * w, 1, -1).to(x.device)
 
+        # 6. 进入主体 DiT 结构进行自注意力和去噪变换
         for block in self.blocks:
             if self.training:
                 x = gradient_checkpoint_forward(

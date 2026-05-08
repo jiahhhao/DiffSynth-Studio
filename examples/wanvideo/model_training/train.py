@@ -62,31 +62,48 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
         
+    def get_video_data(self, data):
+        if "video" in data:
+            return data["video"]
+        if "path" in data:
+            return data["path"]
+        raise KeyError("Expected metadata to contain either 'video' or 'path'.")
+
+    def get_prompt_text(self, data):
+        if "prompt" in data:
+            return data["prompt"]
+        if "text" in data:
+            return data["text"]
+        raise KeyError("Expected metadata to contain either 'prompt' or 'text'.")
+
     def parse_extra_inputs(self, data, extra_inputs, inputs_shared):
+        video = self.get_video_data(data)
         for extra_input in extra_inputs:
             if extra_input == "input_image":
-                inputs_shared["input_image"] = data["video"][0]
+                inputs_shared["input_image"] = video[0]
             elif extra_input == "end_image":
-                inputs_shared["end_image"] = data["video"][-1]
+                inputs_shared["end_image"] = video[-1]
             elif extra_input == "reference_image" or extra_input == "vace_reference_image":
                 inputs_shared[extra_input] = data[extra_input][0]
             else:
                 inputs_shared[extra_input] = data[extra_input]
         if inputs_shared.get("framewise_decoding", False):
             # WanToDance global model
-            inputs_shared["num_frames"] = 4 * (len(data["video"]) - 1) + 1
+            inputs_shared["num_frames"] = 4 * (len(video) - 1) + 1
         return inputs_shared
     
     def get_pipeline_inputs(self, data):
-        inputs_posi = {"prompt": data["prompt"]}
+        video = self.get_video_data(data)
+        prompt = self.get_prompt_text(data)
+        inputs_posi = {"prompt": prompt}
         inputs_nega = {}
         inputs_shared = {
             # Assume you are using this pipeline for inference,
             # please fill in the input parameters.
-            "input_video": data["video"],
-            "height": data["video"][0].size[1],
-            "width": data["video"][0].size[0],
-            "num_frames": len(data["video"]),
+            "input_video": video,
+            "height": video[0].size[1],
+            "width": video[0].size[0],
+            "num_frames": len(video),
             # Please do not modify the following parameters
             # unless you clearly know what this will cause.
             "cfg_scale": 1,
@@ -99,6 +116,8 @@ class WanTrainingModule(DiffusionTrainingModule):
             "max_timestep_boundary": self.max_timestep_boundary,
             "min_timestep_boundary": self.min_timestep_boundary,
         }
+        if "growth_days" in data:
+            inputs_shared["growth_days"] = float(data["growth_days"])
         inputs_shared = self.parse_extra_inputs(data, self.extra_inputs, inputs_shared)
         return inputs_shared, inputs_posi, inputs_nega
     

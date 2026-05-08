@@ -1,0 +1,122 @@
+import os
+import glob
+import torch
+from PIL import Image
+
+from diffsynth.utils.data import save_video
+from diffsynth.pipelines.wan_video import WanVideoPipeline, ModelConfig
+
+
+# 这里改成你自己的 Wan2.2-TI2V-5B 真实路径
+model_dir = "/caoyunkang/zjh/proj/Wan2.2/Wan2.2-TI2V-5B"
+
+# 输入图片路径，改成你的幼苗图像
+image_path = "youmiao.png"
+
+NAME = "81_AfterResize_D"
+
+# 自动找到 diffusion 分片
+dit_paths = sorted(glob.glob(os.path.join(model_dir, "diffusion_pytorch_model-*.safetensors")))
+
+print("找到 diffusion 分片：")
+for p in dit_paths:
+    print("  ", p)
+
+if len(dit_paths) == 0:
+    raise FileNotFoundError(
+        f"没有找到 diffusion_pytorch_model-*.safetensors，请检查 model_dir 是否正确：{model_dir}"
+    )
+
+# 低显存/稳妥配置
+vram_config = {
+    "offload_dtype": torch.bfloat16,
+    "offload_device": "cpu",
+    "onload_dtype": torch.bfloat16,
+    "onload_device": "cpu",
+    "preparing_dtype": torch.bfloat16,
+    "preparing_device": "cuda",
+    "computation_dtype": torch.bfloat16,
+    "computation_device": "cuda",
+}
+
+pipe = WanVideoPipeline.from_pretrained(
+    torch_dtype=torch.bfloat16,
+    device="cuda",
+    model_configs=[
+        # 1. 主 diffusion 模型，注意这里是具体分片文件列表，不是目录
+        ModelConfig(
+            path=dit_paths,
+            **vram_config,
+        ),
+
+        # 2. T5 文本编码器
+        ModelConfig(
+            path=os.path.join(model_dir, "models_t5_umt5-xxl-enc-bf16.pth"),
+            **vram_config,
+        ),
+
+        # 3. Wan2.2 VAE，注意不是 Wan2.1_VAE.pth
+        ModelConfig(
+            path=os.path.join(model_dir, "Wan2.2_VAE.pth"),
+            **vram_config,
+        ),
+    ],
+
+    # 你的目录里有 google 文件夹，通常里面是 google/umt5-xxl
+    tokenizer_config=ModelConfig(
+        path=os.path.join(model_dir, "google", "umt5-xxl")
+    ),
+
+    # 用当前空闲显存，而不是总显存
+    vram_limit=torch.cuda.mem_get_info("cuda")[0] / (1024 ** 3) - 2,
+)
+
+lora_path = "/caoyunkang/zjh/proj/DiffSynth-Studio/models/train/Wan2.2-TI2V-5B_lora/epoch-2.safetensors"
+
+pipe.load_lora(pipe.dit, lora_path, alpha=1)
+
+# 读入输入图片
+input_image = Image.open(image_path).convert("RGB").resize((2056, 2452))
+
+video = pipe(
+    input_image=input_image,
+    # noraml
+    # prompt = (
+    # "Use the input image as a fixed scene. "
+    # "Keep the greenhouse environment, pot, background, lighting, and camera viewpoint unchanged. "
+    # "Only the corn seedling grows naturally, like a fixed-camera plant growth time-lapse. "
+    # "The plant develops into the appearance of about 30 days later, becoming taller and more mature, "
+    # "with longer and more expanded green leaves. "
+    # "Everything except the plant remains the same."
+    # ),
+    # negative_prompt=(
+    #     "low quality, blurry, static, distorted plant, extra leaves, deformed structure, "
+    #     "flickering, watermark, text, bad motion, oversaturated, overexposed, noisy background"
+    # ),
+
+    # drought-stressed
+    prompt = (
+    "Use the input image as a fixed scene. "
+    "Keep the greenhouse environment, pot, background, lighting, and camera viewpoint unchanged. "
+    "Only the corn seedling changes naturally under drought-stressed conditions, like a fixed-camera plant drought experiment time-lapse. "
+    "The plant is under continuous water deficit, with irrigation stopped from an early growth stage and soil moisture gradually reduced. "
+    "About 30 days later, the corn plant shows clear drought stress symptoms: inhibited growth, reduced vigor, "
+    "less leaf expansion, leaf rolling, drooping, wilting, and partial yellowing or drying, especially on older leaves. "
+    "The plant should look stressed and less healthy than a well-watered plant. "
+    "If visible, the soil should appear dry. "
+    "Everything except the plant remains the same."
+    ),
+    negative_prompt=(
+    "low quality, blurry, static, distorted plant, extra leaves, deformed structure, flickering, "
+    "watermark, text, bad motion, oversaturated, overexposed, noisy background, "
+    "healthy vigorous growth, lush green leaves, unrealistic recovery, large scene change"
+    ),
+    height=2452,
+    width=2056,
+    num_frames=81,
+    num_inference_steps=30,
+    seed=0,
+    tiled=True,
+)
+
+save_video(video, f"./results/wan22_{NAME}.mp4", fps=15, quality=5, save_frames_dir=f"./results/wan22_{NAME}_frames")

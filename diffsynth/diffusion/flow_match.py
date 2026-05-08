@@ -33,11 +33,11 @@ class FlowMatchScheduler():
     def set_timesteps_wan(num_inference_steps=100, denoising_strength=1.0, shift=None):
         sigma_min = 0.0
         sigma_max = 1.0
-        shift = 5 if shift is None else shift
+        shift = 5 if shift is None else shift       # shift 的作用是对原始的 sigma 分布做一个非线性变换，让时间步分布发生偏移
         num_train_timesteps = 1000
         sigma_start = sigma_min + (sigma_max - sigma_min) * denoising_strength
-        sigmas = torch.linspace(sigma_start, sigma_min, num_inference_steps + 1)[:-1]
-        sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
+        sigmas = torch.linspace(sigma_start, sigma_min, num_inference_steps + 1)[:-1]       # 生成一组从 sigma_start 到 sigma_min 的线性序列。
+        sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)        # sigma' = 5 * sigma / (1 + 4 * sigma)
         timesteps = sigmas * num_train_timesteps
         return sigmas, timesteps
     

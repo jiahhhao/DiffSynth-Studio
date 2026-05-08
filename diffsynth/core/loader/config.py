@@ -5,7 +5,14 @@ from modelscope import snapshot_download
 from huggingface_hub import snapshot_download as hf_snapshot_download
 from typing import Optional
 
-
+'''
+if path 已经给了:
+    直接用 path
+else:
+    根据 model_id 和 origin_file_pattern 下载模型
+    然后把下载后的文件路径赋值给 path
+'''
+    
 @dataclass
 class ModelConfig:
     path: Union[str, list[str]] = None

@@ -137,11 +137,21 @@ class VideoData:
             frame.save(os.path.join(folder, f"{i}.png"))
 
 
-def save_video(frames, save_path, fps, quality=9, ffmpeg_params=None):
+def save_video(frames, save_path, fps, quality=9, ffmpeg_params=None, save_frames_dir=None):
+    if save_frames_dir is not None:
+        os.makedirs(save_frames_dir, exist_ok=True)
+
     writer = imageio.get_writer(save_path, fps=fps, quality=quality, ffmpeg_params=ffmpeg_params)
-    for frame in tqdm(frames, desc="Saving video"):
+    # for frame in tqdm(frames, desc="Saving video"):
+    #     frame = np.array(frame)
+    #     writer.append_data(frame)
+    for i, frame in enumerate(tqdm(frames, desc="Saving video and frames")):
         frame = np.array(frame)
         writer.append_data(frame)
+
+        if save_frames_dir is not None:
+            frame_path = os.path.join(save_frames_dir, f"frame_{i:04d}.png")
+            imageio.imwrite(frame_path, frame)
     writer.close()
 
 def save_frames(frames, save_path):
