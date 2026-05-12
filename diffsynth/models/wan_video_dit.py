@@ -74,6 +74,31 @@ def sinusoidal_embedding_1d(dim, position):
     return x.to(position.dtype)
 
 
+
+
+class GrowthDaysEmbeddingMLP(nn.Module):
+    """
+    第三版尝试：用可训练 MLP 单独处理 growth_days。
+    不把 growth 条件写进 timestep，避免再次破坏扩散时间步语义。
+    输入使用 [growth_days / 100, days_per_frame / 10]，保持为物理量归一化，
+    不依赖某个数据集的 max_growth_days。
+    """
+    def __init__(self, dim: int, hidden_dim: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, dim),
+        )
+        # 第三版尝试：最后一层零初始化，让刚启用 MLP 时等价于追加一个零 token，
+        # 训练会逐步学习 growth_days 的有效方向，避免一开始就扰动基模型。
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, growth_features: torch.Tensor):
+        return self.net(growth_features)
+
+
 def precompute_freqs_cis_3d(dim: int, end: int = 1024, theta: float = 10000.0):
     # 3d rope precompute
     f_freqs_cis = precompute_freqs_cis(dim - 2 * (dim // 3), end, theta)
@@ -483,6 +508,45 @@ class WanModel(torch.nn.Module):
         self.wantodance_enable_global = wantodance_enable_global
         self.wantodance_enable_dynamicfps = wantodance_enable_dynamicfps
         self.wantodance_enable_unimodel = wantodance_enable_unimodel
+
+    def ensure_growth_embedding_mlp(self, trainable: bool = False, device=None, dtype=None):
+        """
+        第三版尝试：动态挂载 growth_days MLP。
+        注意：不要在 __init__ 中创建该模块，否则加载官方 Wan2.2 权重时会出现 missing keys。
+        """
+        if not hasattr(self, "growth_embedding_mlp") or self.growth_embedding_mlp is None:
+            self.growth_embedding_mlp = GrowthDaysEmbeddingMLP(self.dim)
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+        self.growth_embedding_mlp.to(device=device, dtype=dtype)
+        self.growth_embedding_mlp.requires_grad_(trainable)
+        return self.growth_embedding_mlp
+
+    def load_extra_lora_state_dict(self, state_dict, device=None, dtype=None):
+        """
+        第三版尝试：LoRA checkpoint 中除了 lora_A/lora_B，也可能包含 growth_embedding_mlp。
+        这里单独加载它；普通 LoRA loader 仍负责原本的 LoRA 权重。
+        """
+        growth_state_dict = {}
+        for key, value in state_dict.items():
+            if key.startswith("growth_embedding_mlp."):
+                growth_state_dict[key[len("growth_embedding_mlp."):]] = value
+            elif key.startswith("pipe.dit.growth_embedding_mlp."):
+                growth_state_dict[key[len("pipe.dit.growth_embedding_mlp."):]] = value
+        if len(growth_state_dict) == 0:
+            return 0
+        growth_mlp = self.ensure_growth_embedding_mlp(trainable=False, device=device, dtype=dtype)
+        growth_state_dict = {
+            key: value.to(device=device, dtype=dtype) if torch.is_tensor(value) else value
+            for key, value in growth_state_dict.items()
+        }
+        load_result = growth_mlp.load_state_dict(growth_state_dict, strict=False)
+        if len(load_result.missing_keys) > 0 or len(load_result.unexpected_keys) > 0:
+            print(f"Warning: growth_embedding_mlp key mismatch. missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}")
+        return len(growth_state_dict)
+
 
     def wantodance_after_transformer_block(self, block_idx, hidden_states):
         if self.wantodance_enable_music_inject:

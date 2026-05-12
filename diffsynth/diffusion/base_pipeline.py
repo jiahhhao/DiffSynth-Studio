@@ -257,6 +257,12 @@ class BasePipeline(torch.nn.Module):
                 lora = load_state_dict(lora_config.path, torch_dtype=self.torch_dtype, device=self.device)
         else:
             lora = state_dict
+        # 第三版 growth MLP 尝试：LoRA checkpoint 里可能同时保存了非 LoRA 的 growth_embedding_mlp。
+        # 普通 LoRA loader 只处理 lora_A/lora_B，所以这里先给具体模型一个机会加载额外可训练参数。
+        if hasattr(module, "load_extra_lora_state_dict"):
+            extra_loaded_num = module.load_extra_lora_state_dict(lora, device=self.device, dtype=self.torch_dtype)
+            if verbose >= 1 and extra_loaded_num > 0:
+                print(f"{extra_loaded_num} extra tensors are loaded from LoRA checkpoint.")
         lora_loader = self.lora_loader(torch_dtype=self.torch_dtype, device=self.device)
         lora = lora_loader.convert_state_dict(lora)
         if hotload is None:

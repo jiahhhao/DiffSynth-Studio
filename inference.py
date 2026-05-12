@@ -13,7 +13,16 @@ model_dir = "/caoyunkang/zjh/proj/Wan2.2/Wan2.2-TI2V-5B"
 # 输入图片路径，改成你的幼苗图像
 image_path = "youmiao.png"
 
-NAME = "576*480_5f_27d_30s_seed0_context_C_changedprompt"
+# ---- TEST CONFIGS ----
+HIGH = 576
+WIDTH = 480
+FRAME=9
+DAYS=30
+STEPS=30
+ENV='D'
+CROSSATTN='context'
+CONFIX='MLP'
+FPS=1
 
 # 自动找到 diffusion 分片
 dit_paths = sorted(glob.glob(os.path.join(model_dir, "diffusion_pytorch_model-*.safetensors")))
@@ -71,17 +80,37 @@ pipe = WanVideoPipeline.from_pretrained(
     vram_limit=torch.cuda.mem_get_info("cuda")[0] / (1024 ** 3) - 2,
 )
 
-lora_path = "/caoyunkang/zjh/proj/DiffSynth-Studio/models/train/Wan2.2-TI2V-5B_lora_growth_context_token/epoch-2.safetensors"
+lora_path = "/caoyunkang/zjh/proj/DiffSynth-Studio/models/train/Wan2.2-TI2V-5B_lora_growth_mlp_context_token/epoch-2.safetensors"
 
 pipe.load_lora(pipe.dit, lora_path, alpha=1.0)
 
 # 读入输入图片
-input_image = Image.open(image_path).convert("RGB").resize((480, 576))
+input_image = Image.open(image_path).convert("RGB").resize((WIDTH, HIGH))
+
+if ENV == 'D':
+    PROMPT = (
+        "Greenhouse potted maize seedling under drought stress, humidity 10%, water shortage, curled leaves, wilted leaves, dry leaf tips, slower growth."
+    )
+    NEGATIVE_PROMPT = (
+        "low quality, blurry, static, distorted plant, extra leaves, deformed structure, flickering, "
+        "watermark, text, bad motion, oversaturated, overexposed, noisy background, "
+        "healthy vigorous growth, lush green leaves, unrealistic recovery, large scene change"
+    )
+else:
+    PROMPT = (
+        "Greenhouse potted maize seedling, healthy green leaves, normal growth, humidity 50%, no water shortage."
+    )
+    NEGATIVE_PROMPT = (
+        "low quality, blurry, static, distorted plant, extra leaves, deformed structure, "
+        "flickering, watermark, text, bad motion, oversaturated, overexposed, noisy background"
+    )
 
 video = pipe(
     input_image=input_image,
+    prompt=PROMPT,
+    negative_prompt=NEGATIVE_PROMPT,
     # noraml
-    prompt = ("Greenhouse potted maize seedling, healthy green leaves, normal growth, humidity 50%, no water shortage."),
+    # prompt = ("Greenhouse potted maize seedling, healthy green leaves, normal growth, humidity 50%, no water shortage."),
     # prompt = (
     # "Use the input image as a fixed scene. "
     # "Keep the greenhouse environment, pot, background, lighting, and camera viewpoint unchanged. "
@@ -90,13 +119,13 @@ video = pipe(
     # "with longer and more expanded green leaves. "
     # "Everything except the plant remains the same."
     # ),
-    negative_prompt=(
-        "low quality, blurry, static, distorted plant, extra leaves, deformed structure, "
-        "flickering, watermark, text, bad motion, oversaturated, overexposed, noisy background"
-    ),
+    # negative_prompt=(
+    #     "low quality, blurry, static, distorted plant, extra leaves, deformed structure, "
+    #     "flickering, watermark, text, bad motion, oversaturated, overexposed, noisy background"
+    # ),
 
     
-    # prompt = ("Greenhouse potted maize seedling under drought stress, humidity 10%, water shortage, curled leaves, wilted leaves, dry leaf tips, slower growth."
+    # prompt = ("Greenhouse potted maize seedling under drought stress, humidity 10%, water shortage, curled leaves, wilted leaves, dry leaf tips, slower growth."),
     # prompt = (
     # "Use the input image as a fixed scene. "
     # "Keep the greenhouse environment, pot, background, lighting, and camera viewpoint unchanged. "
@@ -113,13 +142,14 @@ video = pipe(
     # "watermark, text, bad motion, oversaturated, overexposed, noisy background, "
     # "healthy vigorous growth, lush green leaves, unrealistic recovery, large scene change"
     # ),
-    height=576,
-    width=480,
-    num_frames=5,
-    growth_days=27,
-    num_inference_steps=30,
+    height=HIGH,
+    width=WIDTH,
+    num_frames=FRAME,
+    growth_days=DAYS,
+    num_inference_steps=STEPS,
     seed=0,
     tiled=True,
 )
 
-save_video(video, f"./results/wan22_{NAME}.mp4", fps=1, quality=5, save_frames_dir=f"./results/wan22_{NAME}_frames")
+save_video(video, f"./results/MLP/wan22_{HIGH}x{WIDTH}_{FRAME}f_{DAYS}d_{STEPS}s_seed0_{CROSSATTN}_{ENV}_{CONFIX}.mp4", 
+        fps=FPS, quality=5, save_frames_dir=f"./results/MLP/wan22_{HIGH}x{WIDTH}_{FRAME}f_{DAYS}d_{STEPS}s_seed0_{CROSSATTN}_{ENV}_{CONFIX}_frames")

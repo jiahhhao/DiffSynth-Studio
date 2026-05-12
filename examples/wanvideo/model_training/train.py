@@ -17,6 +17,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         use_gradient_checkpointing=True,
         use_gradient_checkpointing_offload=False,
         extra_inputs=None,
+        train_growth_mlp=False,
         fp8_models=None,
         offload_models=None,
         device="cpu",
@@ -35,6 +36,11 @@ class WanTrainingModule(DiffusionTrainingModule):
         tokenizer_config = ModelConfig(model_id="Wan-AI/Wan2.1-T2V-1.3B", origin_file_pattern="google/umt5-xxl/") if tokenizer_path is None else ModelConfig(tokenizer_path)
         audio_processor_config = self.parse_path_or_model_id(audio_processor_path)
         self.pipe = WanVideoPipeline.from_pretrained(torch_dtype=torch.bfloat16, device=device, model_configs=model_configs, tokenizer_config=tokenizer_config, audio_processor_config=audio_processor_config)
+        self.train_growth_mlp = train_growth_mlp
+        if self.train_growth_mlp and self.pipe.dit is not None and hasattr(self.pipe.dit, "ensure_growth_embedding_mlp"):
+            # 第三版尝试：训练前动态创建 growth MLP。
+            # 不能写进 WanModel.__init__，否则官方权重加载时会因为缺少该参数报 missing keys。
+            self.pipe.dit.ensure_growth_embedding_mlp(trainable=False, device=device, dtype=torch.bfloat16)
         self.pipe = self.split_pipeline_units(task, self.pipe, trainable_models, lora_base_model)
         
         # Training mode
@@ -44,6 +50,10 @@ class WanTrainingModule(DiffusionTrainingModule):
             preset_lora_path, preset_lora_model,
             task=task,
         )
+        if self.train_growth_mlp and self.pipe.dit is not None and hasattr(self.pipe.dit, "ensure_growth_embedding_mlp"):
+            # 第三版尝试：仍然使用 LoRA 训练流程，但额外让 growth MLP 参与训练和保存。
+            # 保存时 export_trainable_state_dict 会把 LoRA 参数和 growth_embedding_mlp 参数一起写入 safetensors。
+            self.pipe.dit.ensure_growth_embedding_mlp(trainable=True, device=device, dtype=torch.bfloat16)
         
         # Store other configs
         self.use_gradient_checkpointing = use_gradient_checkpointing
@@ -140,6 +150,7 @@ def wan_parser():
     parser.add_argument("--min_timestep_boundary", type=float, default=0.0, help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
     parser.add_argument("--initialize_model_on_cpu", default=False, action="store_true", help="Whether to initialize models on CPU.")
     parser.add_argument("--framewise_decoding", default=False, action="store_true", help="Enable it if this model is a WanToDance global model.")
+    parser.add_argument("--train_growth_mlp", default=False, action="store_true", help="Train a small MLP that maps growth_days to an extra context token.")
     return parser
 
 
@@ -187,6 +198,7 @@ if __name__ == "__main__":
         use_gradient_checkpointing=args.use_gradient_checkpointing,
         use_gradient_checkpointing_offload=args.use_gradient_checkpointing_offload,
         extra_inputs=args.extra_inputs,
+        train_growth_mlp=args.train_growth_mlp,
         fp8_models=args.fp8_models,
         offload_models=args.offload_models,
         task=args.task,

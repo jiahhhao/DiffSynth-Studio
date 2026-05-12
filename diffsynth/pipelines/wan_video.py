@@ -1351,8 +1351,57 @@ def append_growth_days_context_token(
     growth_token = sinusoidal_embedding_1d(context.shape[-1], growth_position)
     growth_token = growth_token.to(device=context.device, dtype=context.dtype)
     if growth_token.shape[0] != context.shape[0]:
+        growth_token_batch = growth_token.shape[0]
         growth_token = growth_token[:1].repeat(context.shape[0], 1)
-        print(f"    Warning: growth token batch size {growth_token.shape[0]} does not match context batch size {context.shape[0]}. Repeating growth token to match context batch size.")
+        # 第二版尝试：原来的 warning 在 repeat 之后打印，会把 batch size 打成已经修正后的值，容易误解。
+        # print(f"    Warning: growth token batch size {growth_token.shape[0]} does not match context batch size {context.shape[0]}. Repeating growth token to match context batch size.")
+        print(f"    Warning: growth token batch size {growth_token_batch} does not match context batch size {context.shape[0]}. Repeating growth token to match context batch size.")
+    return torch.cat([context, growth_token.unsqueeze(1)], dim=1)
+
+
+
+def build_growth_days_features(
+    context: torch.Tensor,
+    growth_days,
+    num_frames: Optional[int] = None,
+):
+    if torch.is_tensor(growth_days):
+        growth_days_tensor = growth_days.to(device=context.device, dtype=context.dtype).flatten()
+    else:
+        growth_days_tensor = torch.tensor([float(growth_days)], device=context.device, dtype=context.dtype)
+    if growth_days_tensor.shape[0] != context.shape[0]:
+        # 第三版尝试：当前 dataloader batch size 为 1；CFG 或后续 batch 扩展时使用同一个天数条件复制。
+        # 如果之后真正做多样本 batch，需要让 metadata 的 growth_days 按样本传入。
+        growth_days_tensor = growth_days_tensor[:1].repeat(context.shape[0])
+    frame_count = max(float(num_frames or 1) - 1.0, 1.0)
+    days_per_frame = growth_days_tensor / frame_count
+    # 第三版尝试：MLP 输入仍然使用物理量，不引入 max_growth_days。
+    # growth_days / 100 表示终点天数尺度，days_per_frame / 10 表示相邻帧变化速度尺度。
+    return torch.stack([growth_days_tensor / 100.0, days_per_frame / 10.0], dim=1)
+
+
+def append_growth_days_mlp_context_token(
+    dit: WanModel,
+    context: torch.Tensor,
+    growth_days,
+    num_frames: Optional[int] = None,
+):
+    if growth_days is None:
+        return context
+    if not hasattr(dit, "growth_embedding_mlp") or dit.growth_embedding_mlp is None:
+        # 第三版尝试：现在要求 growth_days 必须由训练/加载后的 MLP 处理。
+        # 旧的第二版固定 sinusoidal token 回退会掩盖 checkpoint 没有正确加载 MLP 的问题，
+        # 因此保留旧代码但不再运行，直接报错提醒重新训练或加载包含 growth_embedding_mlp 的权重。
+        # return append_growth_days_context_token(context, growth_days, num_frames)
+        raise RuntimeError(
+            "growth_days was provided, but dit.growth_embedding_mlp is not initialized. "
+            "Please train with --train_growth_mlp and load a checkpoint containing growth_embedding_mlp.* weights."
+        )
+    growth_features = build_growth_days_features(context, growth_days, num_frames)
+    growth_token = dit.growth_embedding_mlp(growth_features.to(dtype=context.dtype))
+    growth_token = growth_token.to(device=context.device, dtype=context.dtype)
+    # print(growth_token)
+    # print(growth_token.shape)
     return torch.cat([context, growth_token.unsqueeze(1)], dim=1)
 
 def model_fn_wan_video(
@@ -1480,7 +1529,10 @@ def model_fn_wan_video(
     if motion_bucket_id is not None and motion_controller is not None:
         t_mod = t_mod + motion_controller(motion_bucket_id).unflatten(1, (6, dit.dim))
     context = dit.text_embedding(context)
-    context = append_growth_days_context_token(context, growth_days, num_frames)
+    # 第二版尝试：固定 sinusoidal growth token 已保留，但第三版要训练 MLP，故不再直接调用。
+    # context = append_growth_days_context_token(context, growth_days, num_frames)
+    # 第三版尝试：优先使用可训练 growth MLP 生成 context token；没有 MLP 时自动回退到第二版。
+    context = append_growth_days_mlp_context_token(dit, context, growth_days, num_frames)
 
     x = latents
     # Merged cfg

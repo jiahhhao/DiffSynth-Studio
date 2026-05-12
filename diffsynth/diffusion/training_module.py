@@ -113,6 +113,13 @@ class DiffusionTrainingModule(torch.nn.Module):
                 new_state_dict[new_key] = value
             elif "lora_A.default.weight" in key or "lora_B.default.weight" in key:
                 new_state_dict[key] = value
+            elif key.startswith("growth_embedding_mlp."):
+                # 第三版 growth MLP 尝试：LoRA checkpoint 里会同时保存可训练 MLP。
+                # 这部分不是 lora_A/lora_B，不能在映射 LoRA key 时被丢掉。
+                new_state_dict[key] = value
+            elif key.startswith("pipe.dit.growth_embedding_mlp."):
+                # 第三版 growth MLP 尝试：兼容没有 remove_prefix_in_ckpt 的 checkpoint。
+                new_state_dict[key[len("pipe.dit."):]] = value
         return new_state_dict
 
 
