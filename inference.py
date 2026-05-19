@@ -16,13 +16,13 @@ image_path = "youmiao.png"
 # ---- TEST CONFIGS ----
 HIGH = 576
 WIDTH = 480
-FRAME=9
-DAYS=30
+FRAME=49
+DAYS=24
 STEPS=30
-ENV='D'
+ENV='C'
 CROSSATTN='context'
 CONFIX='MLP'
-FPS=1
+FPS=15
 
 # 自动找到 diffusion 分片
 dit_paths = sorted(glob.glob(os.path.join(model_dir, "diffusion_pytorch_model-*.safetensors")))
