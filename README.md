@@ -34,6 +34,14 @@ We believe that a well-developed open-source code framework can lower the thresh
 
 > Currently, the development personnel of this project are limited, with most of the work handled by [Artiprocher](https://github.com/Artiprocher) and [mi804](https://github.com/mi804). Therefore, the progress of new feature development will be relatively slow, and the speed of responding to and resolving issues is limited. We apologize for this and ask developers to understand.
 
+- **June 5, 2026** Ideogram 4 open-sourced. Support includes text-to-image inference. For details, please refer to the [documentation](/docs/en/Model_Details/Ideogram-4.md) and [example code](/examples/ideogram4/).
+
+- **May 21, 2026**: Added support for image quality metrics models, including FID, CLIP, Aesthetic, PickScore, ImageReward, HPSv2, and HPSv3. For details, refer to the [documentation](/docs/en/Model_Details/Image-Quality-Metrics.md) and [example code](/examples/image_quality_metric/).
+
+- **May 18, 2026** Added **CPU Offload Training** support. By moving model weights layer-by-layer between CPU and GPU, it significantly reduces GPU VRAM usage during training, enabling LoRA training of large models even on consumer-grade GPUs, compatible with all models. Simply add `--enable_model_cpu_offload` to your training command to enable (currently supports single-GPU training only). For details, see the [documentation](/docs/en/Training/Offload_Training.md).
+
+- **May 14, 2026** HiDream-O1-Image open-sourced, welcome a new member to the image model family! Support includes text-to-image generation, image editing, low VRAM inference, and training capabilities. For details, please refer to the [documentation](/docs/en/Model_Details/HiDream-O1-Image.md) and [example code](/examples/hidream_o1_image/).
+
 - **April 28, 2026** 🔥 We are excited to announce the release of **Diffusion Templates**, a plugin framework designed for Diffusion models that significantly lowers the barrier to training controllable generative models. Let's explore this cutting-edge technology together!
     * Open-source code: [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio)
     * Technical report: [arXiv](https://arxiv.org/abs/2604.24351)
@@ -49,6 +57,9 @@ We believe that a well-developed open-source code framework can lower the thresh
 
 - **April 14, 2026** JoyAI-Image open-sourced, welcome a new member to the image editing model family! Support includes instruction-guided image editing, low VRAM inference, and training capabilities. For details, please refer to the [documentation](/docs/en/Model_Details/JoyAI-Image.md) and [example code](/examples/joyai_image/).
 
+<details>
+<summary>More</summary>
+
 - **March 19, 2026**: Added support for [openmoss/MOVA-720p](https://modelscope.cn/models/openmoss/MOVA-720p) and [openmoss/MOVA-360p](https://modelscope.cn/models/openmoss/MOVA-360p) models, including training and inference capabilities. [Documentation](/docs/en/Model_Details/Wan.md) and [example code](/examples/mova/) are now available.
 
 - **March 12, 2026**: We have added support for the [LTX-2.3](https://modelscope.cn/models/Lightricks/LTX-2.3) audio-video generation model. The features includes text-to-audio/video, image-to-audio/video, IC-LoRA control, audio-to-video, and audio-video inpainting. We have supported the complete inference and training functionalities. For details, please refer to the [documentation](/docs/en/Model_Details/LTX-2.md) and [code](/examples/ltx2/).
@@ -56,9 +67,6 @@ We believe that a well-developed open-source code framework can lower the thresh
 - **March 3, 2026**: We released the [DiffSynth-Studio/Qwen-Image-Layered-Control-V2](https://www.modelscope.cn/models/DiffSynth-Studio/Qwen-Image-Layered-Control-V2) model, which is an updated version of Qwen-Image-Layered-Control. In addition to the originally supported text-guided functionality, it adds brush-controlled layer separation capabilities.
 
 - **March 2, 2026** Added support for [Anima](https://modelscope.cn/models/circlestone-labs/Anima). For details, please refer to the [documentation](docs/en/Model_Details/Anima.md). This is an interesting anime-style image generation model. We look forward to its future updates.
-
-<details>
-<summary>More</summary>
 
 - **February 26, 2026** Added full and lora training support for the LTX-2 audio-video generation model. See the [documentation](/docs/en/Model_Details/LTX-2.md) for details.
 
@@ -884,6 +892,145 @@ Example code for JoyAI-Image is available at: [/examples/joyai_image/](/examples
 
 </details>
 
+#### HiDream-O1-Image: [/docs/en/Model_Details/HiDream-O1-Image.md](/docs/en/Model_Details/HiDream-O1-Image.md)
+
+<details>
+
+<summary>Quick Start</summary>
+
+Running the following code will quickly load the [HiDream-ai/HiDream-O1-Image](https://modelscope.cn/HiDream-ai/HiDream-O1-Image) model and perform inference. VRAM management is enabled, and the framework will automatically control the loading of model parameters based on available VRAM. The model can run with a minimum of 3GB VRAM.
+
+```python
+from diffsynth.pipelines.hidream_o1_image import HiDreamO1ImagePipeline
+from diffsynth.core.loader.config import ModelConfig
+import torch
+
+
+vram_config = {
+    "offload_dtype": torch.bfloat16,
+    "offload_device": "cpu",
+    "onload_dtype": torch.bfloat16,
+    "onload_device": "cpu",
+    "preparing_dtype": torch.bfloat16,
+    "preparing_device": "cuda",
+    "computation_dtype": torch.bfloat16,
+    "computation_device": "cuda",
+}
+
+
+pipe = HiDreamO1ImagePipeline.from_pretrained(
+    torch_dtype=torch.bfloat16,
+    device="cuda",
+    model_configs=[
+        ModelConfig(model_id="HiDream-ai/HiDream-O1-Image", origin_file_pattern="model-*.safetensors", **vram_config),
+    ],
+    processor_config=ModelConfig(model_id="HiDream-ai/HiDream-O1-Image", origin_file_pattern="./"),
+    vram_limit=torch.cuda.mem_get_info("cuda")[1] / (1024 ** 3) - 0.5,
+)
+image = pipe(
+    prompt="medium shot, eye-level, front view. A woman is seated in an ornate bedroom, illuminated by candlelight, with a calm and composed expression. The subject is a young woman with fair skin, light brown hair styled in an updo with loose tendrils framing her face, and blue eyes. She wears a cream-colored satin robe with delicate floral embroidery and lace trim along the neckline. Her ears are adorned with pearl drop earrings. She is seated on a bed with a dark, intricately carved wooden headboard. To her left, a wooden nightstand holds three lit white candles and a candelabra with multiple lit candles in the background. The bed is covered with patterned pillows and a dark, textured blanket. The walls are paneled with dark wood and feature a large, ornate tapestry with muted earth tones. The lighting creates soft highlights on her face and robe, with warm shadows cast across the room.",
+    negative_prompt=" ",
+    cfg_scale=4.0,
+    height=2048,
+    width=2048,
+    seed=42,
+    num_inference_steps=50,
+)
+image.save("image.jpg")
+```
+
+</details>
+
+<details>
+
+<summary>Examples</summary>
+
+Example code for HiDream-O1-Image is available at: [/examples/hidream_o1_image/](/examples/hidream_o1_image/)
+
+| Model ID | Inference | Low VRAM Inference | Full Training | Full Training Validation | LoRA Training | LoRA Training Validation |
+|-|-|-|-|-|-|-|
+|[HiDream-ai/HiDream-O1-Image](https://modelscope.cn/HiDream-ai/HiDream-O1-Image)|[code](/examples/hidream_o1_image/model_inference/HiDream-O1-Image.py)|[code](/examples/hidream_o1_image/model_inference_low_vram/HiDream-O1-Image.py)|[code](/examples/hidream_o1_image/model_training/full/HiDream-O1-Image.sh)|[code](/examples/hidream_o1_image/model_training/validate_full/HiDream-O1-Image.py)|[code](/examples/hidream_o1_image/model_training/lora/HiDream-O1-Image.sh)|[code](/examples/hidream_o1_image/model_training/validate_lora/HiDream-O1-Image.py)|
+|[HiDream-ai/HiDream-O1-Image-Dev](https://modelscope.cn/HiDream-ai/HiDream-O1-Image-Dev)|[code](/examples/hidream_o1_image/model_inference/HiDream-O1-Image-Dev.py)|[code](/examples/hidream_o1_image/model_inference_low_vram/HiDream-O1-Image-Dev.py)|[code](/examples/hidream_o1_image/model_training/full/HiDream-O1-Image-Dev.sh)|[code](/examples/hidream_o1_image/model_training/validate_full/HiDream-O1-Image-Dev.py)|[code](/examples/hidream_o1_image/model_training/lora/HiDream-O1-Image-Dev.sh)|[code](/examples/hidream_o1_image/model_training/validate_lora/HiDream-O1-Image-Dev.py)|
+
+</details>
+
+#### Ideogram 4: [/docs/en/Model_Details/Ideogram-4.md](/docs/en/Model_Details/Ideogram-4.md)
+
+<details>
+
+<summary>Quick Start</summary>
+
+Running the following code will quickly load the [ideogram-ai/ideogram-4-fp8](https://www.modelscope.cn/models/ideogram-ai/ideogram-4-fp8) model and perform inference. The model can run with a minimum of 24GB VRAM.
+
+```python
+from diffsynth.pipelines.ideogram4 import Ideogram4Pipeline
+from diffsynth.core import ModelConfig
+import torch
+
+
+pipe = Ideogram4Pipeline.from_pretrained(
+    torch_dtype=torch.bfloat16,
+    device="cuda",
+    model_configs=[
+        ModelConfig(model_id="ideogram-ai/ideogram-4-fp8", origin_file_pattern="transformer/diffusion_pytorch_model.safetensors"),
+        # unconditional_transformer is optional. You can delete this line to reduce VRAM required.
+        ModelConfig(model_id="ideogram-ai/ideogram-4-fp8", origin_file_pattern="unconditional_transformer/diffusion_pytorch_model.safetensors"),
+        ModelConfig(model_id="ideogram-ai/ideogram-4-fp8", origin_file_pattern="text_encoder/model.safetensors"),
+        ModelConfig(model_id="ideogram-ai/ideogram-4-fp8", origin_file_pattern="vae/diffusion_pytorch_model.safetensors"),
+    ],
+    tokenizer_config=ModelConfig(model_id="ideogram-ai/ideogram-4-fp8", origin_file_pattern="tokenizer/"),
+)
+prompt = r"""
+{
+  "high_level_description": "A medium-shot photograph of Formula 1 driver Max Verstappen wearing his Red Bull Racing racing suit and cap, smiling as he holds his racing helmet and talks to a man in a white shirt and black vest at a race track.",
+  "style_description": {
+    "aesthetics": "saturated primary colors, rule of thirds, joyful and triumphant",
+    "lighting": "overcast daylight, diffused, soft subtle shadows",
+    "photo": "shallow depth of field, sharp focus, eye-level, telephoto",
+    "medium": "photograph"
+  },
+  "compositional_deconstruction": {
+    "background": "The background is an out-of-focus racing paddock or track environment. Several blurred figures are visible, including one in an orange shirt. A purple and white structure with a red 'F1' logo stands on the left. The scene is outdoors with daylight, though the sky is not visible.",
+    "elements": [
+      {"type": "obj", "bbox": [55, 642, 1000, 937], "desc": "An older man standing in profile, facing left toward Max Verstappen. He has grey hair and fair skin. He is wearing a white long-sleeved button-down shirt with a navy blue quilted vest over it. He has a slight smile."},
+      {"type": "obj", "bbox": [34, 137, 1000, 617], "desc": "Max Verstappen, a fair-skinned male Formula 1 driver, positioned in the center. He is facing forward with a joyful expression and a slight smile. He wears a navy blue Red Bull Racing team uniform with numerous sponsor logos and a matching baseball cap with the number '1'. He is holding a white and red racing helmet in his hands. He has a silver watch on his left wrist."},
+      {"type": "obj", "bbox": [422, 212, 792, 452], "desc": "Max Verstappen's racing helmet, held in front of his chest. It features a white, red, and yellow design with the Red Bull logo and the 'Player 0.0' branding. The visor is clear and open."},
+      {"type": "text", "bbox": [657, 0, 755, 142], "text": "F1", "desc": "Large, stylized red logo on a black and purple background in the lower left."},
+      {"type": "text", "bbox": [768, 0, 818, 147], "text": "Formula 1\nWorld Championship™", "desc": "Small white sans-serif text below the F1 logo on the left side."},
+      {"type": "text", "bbox": [78, 447, 117, 510], "text": "ORACLE\nRed Bull\nRacing", "desc": "Very small white and orange logo on the front of the navy blue cap."},
+      {"type": "text", "bbox": [78, 417, 120, 440], "text": "1", "desc": "Bold red numeral '1' on the front left side of the navy blue cap."},
+      {"type": "text", "bbox": [332, 442, 363, 483], "text": "Red Bull", "desc": "Small yellow and red text logo on the collar of the uniform."},
+      {"type": "text", "bbox": [373, 490, 423, 532], "text": "RAUCH", "desc": "Small yellow and blue logo on the right chest of the uniform."},
+      {"type": "text", "bbox": [422, 473, 500, 532], "text": "BYBIT\nHONDA", "desc": "Medium-sized white sans-serif text on the right chest of the uniform."},
+      {"type": "text", "bbox": [410, 203, 442, 257], "text": "RAUCH", "desc": "Small yellow logo on the left upper arm of the uniform."},
+      {"type": "text", "bbox": [530, 448, 627, 510], "text": "Red Bull", "desc": "Medium red text logo on the right side of the torso, part of the Red Bull graphic."},
+      {"type": "text", "bbox": [680, 417, 768, 523], "text": "Red Bull", "desc": "Large red text logo across the lower torso of the uniform."},
+      {"type": "text", "bbox": [797, 475, 815, 518], "text": "MAX", "desc": "Small white text next to a Dutch flag on the belt area of the uniform."},
+      {"type": "text", "bbox": [558, 317, 715, 355], "text": "Player 0.0", "desc": "Black sans-serif text on a white band on the racing helmet."},
+      {"type": "text", "bbox": [560, 800, 582, 835], "text": "IA.COM", "desc": "Small blue sans-serif text on the right sleeve of the white shirt."},
+      {"type": "text", "bbox": [968, 8, 997, 332], "text": "© Anadolu Agency via Getty Images", "desc": "Small white watermark text in the bottom left corner."}
+    ]
+  }
+}
+"""
+image = pipe(prompt=prompt, height=1024, width=1024, num_inference_steps=48, cfg_scale=7.0, seed=42)
+image.save("image_ideogram-4-fp8.jpg")
+```
+
+</details>
+
+<details>
+
+<summary>Examples</summary>
+
+Example code for Ideogram 4 is available at: [/examples/ideogram4/](/examples/ideogram4/)
+
+| Model ID | Inference | Low VRAM Inference | Full Training | Full Training Validation | LoRA Training | LoRA Training Validation |
+|-|-|-|-|-|-|-|
+|[ideogram-ai/ideogram-4-fp8](https://www.modelscope.cn/models/ideogram-ai/ideogram-4-fp8)|[code](/examples/ideogram4/model_inference/ideogram-4-fp8.py)|-|-|-|-|-|
+
+</details>
+
 ### Video Synthesis
 
 https://github.com/user-attachments/assets/1d66ae74-3b02-40a9-acc3-ea95fc039314
@@ -996,6 +1143,7 @@ Example code for LTX-2 is available at: [/examples/ltx2/](/examples/ltx2/)
 
 | Model ID | Extra Args | Inference | Low-VRAM Inference | Full Training | Full Training Validation | LoRA Training | LoRA Training Validation |
 |-|-|-|-|-|-|-|-|
+|[jd-opensource/JoyAI-Echo](https://modelscope.cn/models/jd-opensource/JoyAI-Echo)||[code](/examples/ltx2/model_inference/JoyAI-Echo-T2AV.py)|[code](/examples/ltx2/model_inference_low_vram/JoyAI-Echo-T2AV.py)|[code](/examples/ltx2/model_training/full/JoyAI-Echo-T2AV-splited.sh)|[code](/examples/ltx2/model_training/validate_full/JoyAI-Echo-T2AV.py)|[code](/examples/ltx2/model_training/lora/JoyAI-Echo-T2AV-splited.sh)|[code](/examples/ltx2/model_training/validate_lora/JoyAI-Echo-T2AV.py)|
 |[Lightricks/LTX-2.3: OneStagePipeline-I2AV](https://www.modelscope.cn/models/Lightricks/LTX-2.3)|`input_images`|[code](/examples/ltx2/model_inference/LTX-2.3-I2AV-OneStage.py)|[code](/examples/ltx2/model_inference_low_vram/LTX-2.3-I2AV-OneStage.py)|[code](/examples/ltx2/model_training/full/LTX-2.3-I2AV-splited.sh)|[code](/examples/ltx2/model_training/validate_full/LTX-2.3-I2AV.py)|[code](/examples/ltx2/model_training/lora/LTX-2.3-I2AV-splited.sh)|[code](/examples/ltx2/model_training/validate_lora/LTX-2.3-I2AV.py)|
 |[Lightricks/LTX-2.3: TwoStagePipeline-I2AV](https://www.modelscope.cn/models/Lightricks/LTX-2.3)|`input_images`|[code](/examples/ltx2/model_inference/LTX-2.3-I2AV-TwoStage.py)|[code](/examples/ltx2/model_inference_low_vram/LTX-2.3-I2AV-TwoStage.py)|-|-|-|-|
 |[Lightricks/LTX-2.3: DistilledPipeline-I2AV](https://www.modelscope.cn/models/Lightricks/LTX-2.3)|`input_images`|[code](/examples/ltx2/model_inference/LTX-2.3-I2AV-DistilledPipeline.py)|[code](/examples/ltx2/model_inference_low_vram/LTX-2.3-I2AV-DistilledPipeline.py)|-|-|-|-|
@@ -1240,6 +1388,56 @@ Example code for ACE-Step is available at: [/examples/ace_step/](/examples/ace_s
 |[ACE-Step/acestep-v15-xl-base](https://www.modelscope.cn/models/ACE-Step/acestep-v15-xl-base)|[code](/examples/ace_step/model_inference/acestep-v15-xl-base.py)|[code](/examples/ace_step/model_inference_low_vram/acestep-v15-xl-base.py)|[code](/examples/ace_step/model_training/full/acestep-v15-xl-base.sh)|[code](/examples/ace_step/model_training/validate_full/acestep-v15-xl-base.py)|[code](/examples/ace_step/model_training/lora/acestep-v15-xl-base.sh)|[code](/examples/ace_step/model_training/validate_lora/acestep-v15-xl-base.py)|
 |[ACE-Step/acestep-v15-xl-sft](https://www.modelscope.cn/models/ACE-Step/acestep-v15-xl-sft)|[code](/examples/ace_step/model_inference/acestep-v15-xl-sft.py)|[code](/examples/ace_step/model_inference_low_vram/acestep-v15-xl-sft.py)|[code](/examples/ace_step/model_training/full/acestep-v15-xl-sft.sh)|[code](/examples/ace_step/model_training/validate_full/acestep-v15-xl-sft.py)|[code](/examples/ace_step/model_training/lora/acestep-v15-xl-sft.sh)|[code](/examples/ace_step/model_training/validate_lora/acestep-v15-xl-sft.py)|
 |[ACE-Step/acestep-v15-xl-turbo](https://www.modelscope.cn/models/ACE-Step/acestep-v15-xl-turbo)|[code](/examples/ace_step/model_inference/acestep-v15-xl-turbo.py)|[code](/examples/ace_step/model_inference_low_vram/acestep-v15-xl-turbo.py)|[code](/examples/ace_step/model_training/full/acestep-v15-xl-turbo.sh)|[code](/examples/ace_step/model_training/validate_full/acestep-v15-xl-turbo.py)|[code](/examples/ace_step/model_training/lora/acestep-v15-xl-turbo.sh)|[code](/examples/ace_step/model_training/validate_lora/acestep-v15-xl-turbo.py)|
+
+</details>
+
+### Image Quality Metrics Models
+
+[/docs/en/Model_Details/Image-Quality-Metrics.md](/docs/en/Model_Details/Image-Quality-Metrics.md)
+
+<details>
+
+<summary>Quick Start</summary>
+
+Run the following code to quickly load PickScore and evaluate an image against a text prompt. The default model will be downloaded from ModelScope to `./models`.
+
+```python
+from diffsynth.metrics import PickScoreMetric, ModelConfig
+from modelscope import dataset_snapshot_download
+from PIL import Image
+
+dataset_snapshot_download(
+    "DiffSynth-Studio/diffsynth_example_dataset",
+    allow_file_pattern="flux/FLUX.1-dev/*",
+    local_dir="./data/diffsynth_example_dataset",
+)
+image = Image.open("data/diffsynth_example_dataset/flux/FLUX.1-dev/1.jpg").convert("RGB")
+prompt = "a dog"
+metric = PickScoreMetric.from_pretrained(
+    model_config=ModelConfig(model_id="DiffSynth-Studio/ImageMetrics", origin_file_pattern="PickScore/model.safetensors"),
+    device="cuda"
+)
+score = metric.compute(prompt, image)[0]
+print(f"PickScore score:: {score:.3f}")
+```
+
+</details>
+
+<details>
+
+<summary>Example Code</summary>
+
+Example code for image quality metrics models can be found at: [/examples/image_quality_metric/](/examples/image_quality_metric/)
+
+| Metric | GitHub Repository | Example Code |
+| - | - | - |
+| PickScore | [GitHub](https://github.com/yuvalkirstain/pickscore) | [code](../../../examples/image_quality_metric/pickscore.py) |
+| ImageReward | [GitHub](https://github.com/zai-org/ImageReward) | [code](../../../examples/image_quality_metric/image_reward.py) |
+| HPSv2 | [GitHub](https://github.com/tgxs002/HPSv2) | [code](../../../examples/image_quality_metric/hpsv2.py) |
+| HPSv3 | [GitHub](https://github.com/MizzenAI/HPSv3) | [code](../../../examples/image_quality_metric/hpsv3.py) |
+| CLIP Score | [GitHub](https://github.com/openai/CLIP) | [code](../../../examples/image_quality_metric/clipscore.py) |
+| Aesthetic | [GitHub](https://github.com/christophschuhmann/improved-aesthetic-predictor) | [code](../../../examples/image_quality_metric/aesthetic.py) |
+| FID | [GitHub](https://github.com/mseitzer/pytorch-fid) | [code](../../../examples/image_quality_metric/fid.py) |
 
 </details>
 
